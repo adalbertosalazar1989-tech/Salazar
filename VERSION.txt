@@ -1,0 +1,4 @@
+SAENG Software SST V2
+Versao: 2.0.0-local
+Data de empacotamento: 2026-07-23
+Modo: local / Producao Restrita ainda nao configurada
