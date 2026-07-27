@@ -1,0 +1,91 @@
+name: Validate SAENG Finalizer
+
+on:
+  push:
+    paths:
+      - 'SAENG_FINAL_DEFINITIVO/**'
+      - '.github/workflows/validate-saeng-finalizer.yml'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Compile finalizer
+        shell: pwsh
+        run: |
+          python -m py_compile SAENG_FINAL_DEFINITIVO/finalizar_saeng.py
+
+      - name: Test patch engine
+        shell: pwsh
+        run: |
+          @'
+          import importlib.util
+          import py_compile
+          import tempfile
+          from pathlib import Path
+
+          path = Path('SAENG_FINAL_DEFINITIVO/finalizar_saeng.py')
+          spec = importlib.util.spec_from_file_location('finalizer', path)
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          old = '''def require_login(request: Request) -> str:\n    user = current_user(request)\n    if not user:\n        raise HTTPException(status_code=401)\n    if settings.certificate_login_required and not current_certificate(request):\n        raise HTTPException(status_code=401)\n    return user\n\ndef add_audit():\n    pass\n'''
+          fixed = module.patch_require_login(old)
+          assert 'certificate_login_required' not in fixed.split('def add_audit')[0]
+
+          with tempfile.TemporaryDirectory() as temp:
+              root = Path(temp)
+              (root / 'app' / 'templates').mkdir(parents=True)
+              (root / 'app' / 'static').mkdir(parents=True)
+              (root / 'app' / 'main.py').write_text(
+                  'from fastapi import Request, HTTPException, Form, Depends\n'
+                  'from .session_vault import certificate_vault\n'
+                  + old
+                  + '\nasync def certificate_login(request, password, file, db):\n    pass\n',
+                  encoding='utf-8'
+              )
+              (root / 'app' / 'templates' / 'login.html').write_text(
+                  '<html><head></head><body>'
+                  '<form action="/login/certificate" method="post"><input type="file" name="file"><input name="password"></form>'
+                  '<form action="/login" method="post"><input name="username"></form>'
+                  '</body></html>',
+                  encoding='utf-8'
+              )
+              (root / 'app' / 'templates' / 'base.html').write_text(
+                  '<html><head></head><body><div class="brand-mark">SS</div></body></html>',
+                  encoding='utf-8'
+              )
+              module.install_assets(root)
+              module.patch_main(root)
+              module.patch_login(root)
+              module.patch_branding(root)
+              py_compile.compile(str(root / 'app' / 'windows_certificate.py'), doraise=True)
+              assert 'SAENG_WINDOWS_CERTIFICATE_FINAL' in (root / 'app' / 'main.py').read_text(encoding='utf-8')
+              assert '/login/windows-certificate' in (root / 'app' / 'templates' / 'login.html').read_text(encoding='utf-8')
+
+          compile(module.WINDOWS_CERTIFICATE_MODULE, 'windows_certificate.py', 'exec')
+          compile(module.LAUNCHER_TEMPLATE.replace('__ROOT__', r'C:\\SAENG_Software_SST_FINAL'), 'launcher.pyw', 'exec')
+          print('Finalizer syntax and patch tests: APPROVED')
+          '@ | Set-Content -Path test_finalizer.py -Encoding UTF8
+          python test_finalizer.py
+
+      - name: Build ZIP artifact
+        shell: pwsh
+        run: |
+          Compress-Archive -Path SAENG_FINAL_DEFINITIVO -DestinationPath SAENG_FINAL_DEFINITIVO_1.0.0-RC1.zip -CompressionLevel Optimal -Force
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAENG_FINAL_DEFINITIVO_1.0.0-RC1
+          path: SAENG_FINAL_DEFINITIVO_1.0.0-RC1.zip
+          if-no-files-found: error
