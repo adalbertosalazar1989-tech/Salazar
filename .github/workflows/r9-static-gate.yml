@@ -1,0 +1,60 @@
+name: SAENG R9 Static Gate
+
+on:
+  push:
+    branches:
+      - saeng-r9-finalizacao-controlada
+  pull_request:
+    paths:
+      - "R9/**"
+      - ".github/workflows/r9-static-gate.yml"
+
+jobs:
+  validate-r9:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python gate
+        shell: pwsh
+        run: python -m py_compile R9/tools/r9_gate.py
+
+      - name: Validate CNPJ implementation
+        shell: pwsh
+        run: |
+          python -c "from R9.tools.r9_gate import validate_cnpj; assert validate_cnpj('18.699.027/0001-80')"
+          python -c "from R9.tools.r9_gate import _cnpj_digit, validate_cnpj; base='ABCD12345678'; d1=_cnpj_digit(base,[5,4,3,2,9,8,7,6,5,4,3,2]); d2=_cnpj_digit(base+d1,[6,5,4,3,2,9,8,7,6,5,4,3,2]); assert validate_cnpj(base+d1+d2)"
+
+      - name: Parse PowerShell
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "R9/FINALIZAR_SAENG_R9.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+
+      - name: Validate required package files
+        shell: pwsh
+        run: |
+          $required = @(
+            "R9/FINALIZAR_SAENG_R9.ps1",
+            "R9/EXECUTAR_FINALIZACAO_R9.cmd",
+            "R9/README_FINALIZACAO_R9.md",
+            "R9/tools/r9_gate.py"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) { throw "Arquivo ausente: $path" }
+          }
